@@ -16,6 +16,19 @@ import { AlertStatus } from '@prisma/client';
 // within the same Node.js process.
 let engineExecutionLock = Promise.resolve();
 
+// Tracks whether a detection pipeline is actively executing right now.
+// Used by the scheduler to implement skip-if-busy without queuing unlimited work.
+let _currentlyRunning = false;
+
+/**
+ * Returns true if a detection pipeline execution is currently in progress.
+ * Safe to call from any part of the same Node.js process.
+ * @returns {boolean}
+ */
+export function isDetectionRunning() {
+  return _currentlyRunning;
+}
+
 /**
  * Builds a deterministic title and description for a match without
  * using human-readable free text search for deduplication.
@@ -98,10 +111,12 @@ export async function runDetection(options = {}) {
     unlock = resolve;
   });
 
+  _currentlyRunning = true;
   try {
     await release;
     return await executeDetectionPipeline(options);
   } finally {
+    _currentlyRunning = false;
     unlock();
   }
 }

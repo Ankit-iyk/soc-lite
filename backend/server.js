@@ -5,6 +5,7 @@
 import { config, getMaskedDatabaseUrl } from './src/config/env.js';
 import app from './src/app.js';
 import prisma from './src/config/prisma.js';
+import { startDetectionScheduler, stopDetectionScheduler } from './src/detection/scheduler.js';
 
 const server = app.listen(config.port, () => {
   console.log(`\n🛡️  SOC Lite Backend`);
@@ -12,19 +13,56 @@ const server = app.listen(config.port, () => {
   console.log(`   Listening on: http://localhost:${config.port}`);
   console.log(`   Health check: http://localhost:${config.port}/api/health`);
   console.log(`   Database    : ${getMaskedDatabaseUrl(config.databaseUrl)}\n`);
+
+  // Start the detection scheduler only in non-test environments and when not
+  // explicitly disabled via DETECTION_SCHEDULER_ENABLED=false.
+  const schedulerEnabled = process.env.DETECTION_SCHEDULER_ENABLED !== 'false';
+  const isTestEnv = config.nodeEnv === 'test';
+
+  if (!isTestEnv && schedulerEnabled) {
+    try {
+      const { intervalMs, windowMinutes } = startDetectionScheduler();
+      console.log(`   Scheduler   : enabled (interval: ${intervalMs}ms, window: ${windowMinutes}m)\n`);
+    } catch (err) {
+      // Invalid configuration should not crash the server; log clearly and continue.
+      console.error(`   Scheduler   : failed to start — ${err.message}`);
+      console.error(`   The HTTP server will continue running without automated detection.\n`);
+    }
+  } else {
+    const reason = isTestEnv ? 'NODE_ENV=test' : 'DETECTION_SCHEDULER_ENABLED=false';
+    console.log(`   Scheduler   : disabled (${reason})\n`);
+  }
 });
+
+// Tracks whether shutdown is in progress to prevent duplicate invocations.
+let _shuttingDown = false;
 
 // Graceful shutdown helper
 async function shutdown(signal) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+
   console.log(`\n${signal} received, shutting down gracefully…`);
-  try {
-    await prisma.$disconnect();
-    console.log('   PostgreSQL connection closed.');
-  } catch (err) {
-    console.error('   Error closing database connection:', err.message);
-  }
-  server.close(() => {
+
+  // 1. Stop future scheduled detection runs.
+  // NOTE: If a detection pass is currently executing, this does NOT cancel it.
+  // The in-flight database transaction will complete normally. We do not
+  // forcibly terminate the process while a detection run is active because
+  // doing so would leave the database in an indeterminate state.
+  stopDetectionScheduler();
+
+  // 2. Close the HTTP server (stop accepting new connections).
+  server.close(async () => {
     console.log('   HTTP server closed.');
+
+    // 3. Disconnect from PostgreSQL after the HTTP server has drained.
+    try {
+      await prisma.$disconnect();
+      console.log('   PostgreSQL connection closed.');
+    } catch (err) {
+      console.error('   Error closing database connection:', err.message);
+    }
+
     process.exit(0);
   });
 }
