@@ -1,0 +1,226 @@
+// prisma/schema.prisma
+// SOC Lite — Central Database Schema for Threat Detection & Incident Management
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  CLOSED
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  CLOSED
+}
+
+enum RuleType {
+  SSH_BRUTE_FORCE
+  PORT_SCAN
+  SUSPICIOUS_IP
+  SUSPICIOUS_ACCESS
+}
+
+enum IocType {
+  IP
+  DOMAIN
+  HASH
+}
+
+// ── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  passwordHash String
+  name         String
+  role         Role       @default(ANALYST)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  assignedIncidents Incident[]
+  auditLogs         AuditLog[]
+
+  @@map("users")
+}
+
+model RawLog {
+  id         String   @id @default(uuid())
+  source     String   // e.g. "auth.log", "syslog", "firewall", "agent"
+  rawContent String   @db.Text
+  receivedAt DateTime @default(now())
+
+  events Event[]
+
+  @@map("raw_logs")
+}
+
+model Event {
+  id        String   @id @default(uuid())
+  rawLogId  String?
+  rawLog    RawLog?  @relation(fields: [rawLogId], references: [id], onDelete: SetNull)
+  timestamp DateTime @default(now())
+  eventType String   // e.g. "ssh_login_failed", "ssh_login_success", "connection_attempt"
+  srcIp     String?
+  dstIp     String?
+  srcPort   Int?
+  dstPort   Int?
+  username  String?
+  hostname  String?
+  message   String?
+  severity  Severity @default(LOW)
+  metadata  Json?
+
+  alertEvents AlertEvent[]
+
+  @@index([timestamp])
+  @@index([srcIp])
+  @@index([eventType])
+  @@map("events")
+}
+
+model DetectionRule {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  type        RuleType
+  description String?
+  severity    Severity @default(MEDIUM)
+  enabled     Boolean  @default(true)
+  config      Json     // Rule-specific parameters (e.g. threshold count, windowSeconds)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  alerts Alert[]
+
+  @@map("detection_rules")
+}
+
+model Alert {
+  id             String      @id @default(uuid())
+  ruleId         String?
+  rule           DetectionRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  title          String
+  description    String
+  severity       Severity    @default(MEDIUM)
+  status         AlertStatus @default(OPEN)
+  firedAt        DateTime    @default(now())
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+
+  alertEvents    AlertEvent[]
+  incidentAlerts IncidentAlert[]
+
+  @@index([status])
+  @@index([severity])
+  @@index([firedAt])
+  @@map("alerts")
+}
+
+model AlertEvent {
+  alertId String
+  eventId String
+
+  alert Alert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([alertId, eventId])
+  @@map("alert_events")
+}
+
+model Incident {
+  id           String         @id @default(uuid())
+  title        String
+  description  String?
+  severity     Severity       @default(MEDIUM)
+  status       IncidentStatus @default(OPEN)
+  assignedToId String?
+  assignedTo   User?          @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  resolvedAt   DateTime?
+
+  incidentAlerts IncidentAlert[]
+
+  @@index([status])
+  @@index([severity])
+  @@map("incidents")
+}
+
+model IncidentAlert {
+  incidentId String
+  alertId    String
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  alert    Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@id([incidentId, alertId])
+  @@map("incident_alerts")
+}
+
+model Asset {
+  id          String   @id @default(uuid())
+  name        String
+  ipAddress   String   @unique
+  type        String   // SERVER, WORKSTATION, FIREWALL, ROUTER, etc.
+  owner       String?
+  criticality Severity @default(MEDIUM)
+  tags        String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([ipAddress])
+  @@map("assets")
+}
+
+model ThreatIndicator {
+  id          String   @id @default(uuid())
+  type        IocType
+  value       String   @unique
+  confidence  Int      @default(80)
+  source      String
+  description String?
+  addedAt     DateTime @default(now())
+
+  @@index([value])
+  @@map("threat_indicators")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String   // e.g. "USER_LOGIN", "RULE_UPDATE", "ALERT_ACK", "INCIDENT_RESOLVE"
+  targetType String?
+  targetId   String?
+  ipAddress  String?
+  details    Json?
+  timestamp  DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([userId])
+  @@map("audit_logs")
+}
