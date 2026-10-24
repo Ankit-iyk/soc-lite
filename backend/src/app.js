@@ -14,6 +14,7 @@ import authRoutes from './modules/auth/auth.routes.js';
 import logRoutes from './modules/logs/logs.routes.js';
 import eventRoutes from './modules/events/events.routes.js';
 import detectionRoutes from './modules/detection/detection.routes.js';
+import ruleRoutes from './modules/rules/rules.routes.js';
 
 const app = express();
 
@@ -39,6 +40,7 @@ app.use('/api/auth',      authRoutes);
 app.use('/api/logs',      logRoutes);
 app.use('/api/events',    eventRoutes);
 app.use('/api/detection', detectionRoutes);
+app.use('/api/rules',     ruleRoutes);
 
 // Future route mounts (added in later phases):
 // app.use('/api/rules',       ruleRoutes);
