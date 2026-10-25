@@ -69,6 +69,7 @@ export async function requireAuth(req, res, next) {
  * @param {...string} allowedRoles - e.g. 'ADMIN', 'ANALYST'
  */
 export function requireRole(...allowedRoles) {
+  const roles = allowedRoles.flat();
   return (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({
@@ -77,10 +78,10 @@ export function requireRole(...allowedRoles) {
       });
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
+    if (!roles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
-        error: `Access denied. Requires one of: [${allowedRoles.join(', ')}]. Current role: ${req.user.role}`,
+        error: `Access denied. Requires one of: [${roles.join(', ')}]. Current role: ${req.user.role}`,
       });
     }
 

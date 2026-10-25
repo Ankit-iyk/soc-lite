@@ -11,6 +11,6 @@ const router = Router();
 router.post('/ingest', requireAuth, requireRole('ADMIN', 'ANALYST'), logsController.ingestLogs);
 
 // Query raw logs — accessible to all authenticated operators (ADMIN, ANALYST, VIEWER)
-router.get('/', requireAuth, logsController.getRawLogs);
+router.get('/', requireAuth, requireRole('ADMIN', 'ANALYST', 'VIEWER'), logsController.getRawLogs);
 
 export default router;

@@ -16,6 +16,13 @@ import eventRoutes from './modules/events/events.routes.js';
 import detectionRoutes from './modules/detection/detection.routes.js';
 import ruleRoutes from './modules/rules/rules.routes.js';
 import alertRoutes from './modules/alerts/alerts.routes.js';
+import incidentRoutes from './modules/incidents/incidents.routes.js';
+
+import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
+import assetRoutes from './modules/assets/assets.routes.js';
+import threatIntelRoutes from './modules/threat-intelligence/threatIntel.routes.js';
+import reportRoutes from './modules/reports/reports.routes.js';
+import auditRoutes from './modules/audit/audit.routes.js';
 
 const app = express();
 
@@ -36,20 +43,21 @@ app.use(express.urlencoded({ extended: true }));
 app.use(requestLogger);
 
 // ── API Routes ────────────────────────────────────────────────────────────
-app.use('/api/health',    healthRoutes);
-app.use('/api/auth',      authRoutes);
-app.use('/api/logs',      logRoutes);
-app.use('/api/events',    eventRoutes);
-app.use('/api/detection', detectionRoutes);
-app.use('/api/rules',     ruleRoutes);
-app.use('/api/alerts',    alertRoutes);
-
-// Future route mounts (added in later phases):
-// app.use('/api/incidents',   incidentRoutes);
-// app.use('/api/assets',      assetRoutes);
-// app.use('/api/threat-intel',threatIntelRoutes);
-// app.use('/api/reports',     reportRoutes);
-// app.use('/api/dashboard',   dashboardRoutes);
+app.use('/api/health',              healthRoutes);
+app.use('/api/auth',                authRoutes);
+app.use('/api/logs',                logRoutes);
+app.use('/api/events',              eventRoutes);
+app.use('/api/detection',           detectionRoutes);
+app.use('/api/rules',               ruleRoutes);
+app.use('/api/alerts',              alertRoutes);
+app.use('/api/incidents',           incidentRoutes);
+app.use('/api/dashboard',           dashboardRoutes);
+app.use('/api/assets',              assetRoutes);
+app.use('/api/threat-intel',        threatIntelRoutes);
+app.use('/api/threat-intelligence', threatIntelRoutes);
+app.use('/api/reports',             reportRoutes);
+app.use('/api/audit-logs',          auditRoutes);
+app.use('/api/audit',               auditRoutes);
 
 // ── 404 handler ───────────────────────────────────────────────────────────
 app.use((_req, res) => {

@@ -49,6 +49,20 @@ enum IocType {
   IP
   DOMAIN
   HASH
+  URL
+}
+
+enum IocStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum AssetStatus {
+  ACTIVE
+  INACTIVE
+  DECOMMISSIONED
 }
 
 // ── Models ──────────────────────────────────────────────────────────────────
@@ -182,31 +196,71 @@ model IncidentAlert {
 }
 
 model Asset {
-  id          String   @id @default(uuid())
-  name        String
-  ipAddress   String   @unique
-  type        String   // SERVER, WORKSTATION, FIREWALL, ROUTER, etc.
-  owner       String?
-  criticality Severity @default(MEDIUM)
-  tags        String[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String      @id @default(uuid())
+  name            String
+  hostname        String?
+  ipAddress       String?     @unique
+  type            String      @default("SERVER") // SERVER, WORKSTATION, LAPTOP, FIREWALL, ROUTER, SWITCH, CLOUD_INSTANCE, OTHER
+  status          AssetStatus @default(ACTIVE)
+  criticality     Severity    @default(MEDIUM)
+  environment     String?     // PRODUCTION, STAGING, DEVELOPMENT, LAB
+  operatingSystem String?     // e.g. "Ubuntu 24.04", "Windows Server 2022"
+  owner           String?     // e.g. "IT Infrastructure", "SecOps"
+  description     String?
+  tags            String[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   @@index([ipAddress])
+  @@index([status])
+  @@index([criticality])
+  @@index([type])
   @@map("assets")
 }
 
 model ThreatIndicator {
-  id          String   @id @default(uuid())
+  id          String          @id @default(uuid())
   type        IocType
-  value       String   @unique
-  confidence  Int      @default(80)
-  source      String
+  value       String          @unique
+  status      IocStatus       @default(ACTIVE)
+  severity    Severity        @default(MEDIUM)
+  confidence  Int             @default(80)
+  source      String          @default("MANUAL")
   description String?
-  addedAt     DateTime @default(now())
+  firstSeenAt DateTime?
+  lastSeenAt  DateTime?
+  expiresAt   DateTime?
+  addedAt     DateTime        @default(now())
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @default(now()) @updatedAt
+
+  enrichments IocEnrichment[]
 
   @@index([value])
+  @@index([type])
+  @@index([status])
+  @@index([severity])
   @@map("threat_indicators")
+}
+
+model IocEnrichment {
+  id             String          @id @default(uuid())
+  indicatorId    String
+  indicator      ThreatIndicator @relation(fields: [indicatorId], references: [id], onDelete: Cascade)
+  provider       String          // e.g. "VIRUSTOTAL", "ABUSEIPDB", "ALIENVAULT_OTX"
+  queriedAt      DateTime        @default(now())
+  status         String          // "SUCCESS", "NOT_FOUND", "RATE_LIMITED", "ERROR", "NOT_CONFIGURED"
+  verdict        String?         // "MALICIOUS", "SUSPICIOUS", "BENIGN", "UNKNOWN"
+  score          Float?          // Score or confidence (0-100)
+  detectionCount Int?            // Flagged engine count
+  totalEngines   Int?            // Total evaluated engines
+  rawSummary     Json?           // Bounded summary of external response
+  errorMessage   String?
+  cached         Boolean         @default(false)
+
+  @@index([indicatorId])
+  @@index([queriedAt])
+  @@map("ioc_enrichments")
 }
 
 model AuditLog {

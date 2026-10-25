@@ -40,3 +40,4 @@ coverage/
 
 # ─── PDF report output (Phase 10) ─────────────────────────────
 backend/reports/generated/
+*.pdf
