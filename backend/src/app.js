@@ -15,6 +15,7 @@ import logRoutes from './modules/logs/logs.routes.js';
 import eventRoutes from './modules/events/events.routes.js';
 import detectionRoutes from './modules/detection/detection.routes.js';
 import ruleRoutes from './modules/rules/rules.routes.js';
+import alertRoutes from './modules/alerts/alerts.routes.js';
 
 const app = express();
 
@@ -41,10 +42,9 @@ app.use('/api/logs',      logRoutes);
 app.use('/api/events',    eventRoutes);
 app.use('/api/detection', detectionRoutes);
 app.use('/api/rules',     ruleRoutes);
+app.use('/api/alerts',    alertRoutes);
 
 // Future route mounts (added in later phases):
-// app.use('/api/rules',       ruleRoutes);
-// app.use('/api/alerts',      alertRoutes);
 // app.use('/api/incidents',   incidentRoutes);
 // app.use('/api/assets',      assetRoutes);
 // app.use('/api/threat-intel',threatIntelRoutes);
