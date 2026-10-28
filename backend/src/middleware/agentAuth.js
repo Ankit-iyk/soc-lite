@@ -15,6 +15,9 @@ import bcrypt from 'bcryptjs';
 import prisma from '../config/prisma.js';
 
 const HEADER = 'x-agent-token';
+const RATE_LIMIT = 60;
+const RATE_WINDOW_MS = 60_000;
+const agentRequestCounts = new Map();
 
 /**
  * Middleware: Validate an agent API token from the X-Agent-Token header.
@@ -29,6 +32,9 @@ export async function requireAgentAuth(req, res, next) {
         success: false,
         error: 'Agent authentication required. Missing X-Agent-Token header.',
       });
+    }
+    if (!/^[a-f\d]{64}$/i.test(rawToken.trim())) {
+      return res.status(401).json({ success: false, error: 'Invalid or revoked agent token.' });
     }
 
     // Fetch all enabled tokens — we cannot look up by raw value since we only
@@ -57,6 +63,23 @@ export async function requireAgentAuth(req, res, next) {
         success: false,
         error: 'Invalid or revoked agent token.',
       });
+    }
+
+    const now = Date.now();
+    const counter = agentRequestCounts.get(matchedToken.id);
+    if (!counter || now - counter.windowStartedAt >= RATE_WINDOW_MS) {
+      agentRequestCounts.set(matchedToken.id, { windowStartedAt: now, count: 1 });
+    } else if (counter.count >= RATE_LIMIT) {
+      res.set('Retry-After', String(Math.ceil((RATE_WINDOW_MS - (now - counter.windowStartedAt)) / 1000)));
+      return res.status(429).json({ success: false, error: 'Collector request rate limit exceeded.' });
+    } else {
+      counter.count++;
+    }
+
+    if (agentRequestCounts.size > 500) {
+      for (const [id, entry] of agentRequestCounts) {
+        if (now - entry.windowStartedAt >= RATE_WINDOW_MS) agentRequestCounts.delete(id);
+      }
     }
 
     // Update lastUsedAt asynchronously — don't block the request

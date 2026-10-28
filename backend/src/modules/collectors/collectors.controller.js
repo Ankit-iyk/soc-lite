@@ -10,12 +10,99 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import prisma from '../../config/prisma.js';
-import { normalizeLog } from '../logs/logParser.js';
+import { normalizeLog, parseWindowsEventRecord } from '../logs/logParser.js';
+import { publishLiveUpdate } from '../../live/eventBus.js';
 
 const BCRYPT_ROUNDS = 10;
 const TOKEN_BYTE_LENGTH = 32; // 256-bit raw token
 const MAX_BATCH_SIZE = 200;   // Higher limit for agent batches
+const MAX_BATCH_BYTES = 900_000;
 const MAX_ERROR_LENGTH = 500;
+const MAX_EVENT_CONTENT_LENGTH = 128_000;
+const ALLOWED_CHANNELS = new Set(['System', 'Application', 'Security']);
+const SAFE_ERROR_MESSAGES = {
+  PERMISSION_DENIED: 'The collector cannot read one or more configured event channels.',
+  CHANNEL_UNAVAILABLE: 'A configured Windows event channel is unavailable.',
+  COLLECTION_FAILED: 'The collector could not read or parse a Windows event.',
+  DELIVERY_REJECTED: 'The backend rejected a collector event batch.',
+  BACKEND_UNAVAILABLE: 'The collector could not reach the backend.',
+};
+
+export function createSourceEventKey(agentName, item) {
+  const sourceMachine = typeof item.hostname === 'string' && item.hostname.trim()
+    ? item.hostname.trim()
+    : agentName;
+  return crypto.createHash('sha256')
+    .update(JSON.stringify([
+      sourceMachine,
+      item.source.trim(),
+      String(item.eventRecordId),
+      item.timeCreated,
+      item.provider || '',
+      item.eventId,
+    ]))
+    .digest('hex');
+}
+
+export function validateAgentLogBatch(logs) {
+  if (!Array.isArray(logs) || logs.length === 0) {
+    return { status: 400, error: 'Body must be { logs: [...] } with at least one item.' };
+  }
+  if (logs.length > MAX_BATCH_SIZE) {
+    return { status: 400, error: `Batch size ${logs.length} exceeds maximum ${MAX_BATCH_SIZE}.` };
+  }
+  if (Buffer.byteLength(JSON.stringify(logs), 'utf8') > MAX_BATCH_BYTES) {
+    return { status: 413, error: 'Collector batch exceeds the maximum request size.' };
+  }
+
+  for (let index = 0; index < logs.length; index++) {
+    const item = logs[index];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return { status: 400, error: `Item at index ${index} must be an object.` };
+    }
+    if (typeof item.source !== 'string' || !item.source.trim()) {
+      return { status: 400, error: `Item at index ${index} missing 'source'.` };
+    }
+    if (typeof item.content !== 'string' || !item.content.trim()) {
+      return { status: 400, error: `Item at index ${index} missing 'content'.` };
+    }
+    if (item.content.length > MAX_EVENT_CONTENT_LENGTH) {
+      return { status: 413, error: `Item at index ${index} exceeds the maximum event size.` };
+    }
+    if (!ALLOWED_CHANNELS.has(item.source.trim())) {
+      return { status: 400, error: `Item at index ${index} has an unsupported channel.` };
+    }
+    if (!Number.isInteger(item.eventId) || item.eventId < 0 || item.eventId > 65535) {
+      return { status: 400, error: `Item at index ${index} has an invalid eventId.` };
+    }
+    if (item.eventRecordId == null || !/^\d{1,32}$/.test(String(item.eventRecordId))) {
+      return { status: 400, error: `Item at index ${index} has an invalid eventRecordId.` };
+    }
+    if (typeof item.timeCreated !== 'string' || item.timeCreated.length > 64 || Number.isNaN(Date.parse(item.timeCreated))) {
+      return { status: 400, error: `Item at index ${index} has an invalid timeCreated.` };
+    }
+    if (item.hostname != null && (typeof item.hostname !== 'string' || item.hostname.length > 255)) {
+      return { status: 400, error: `Item at index ${index} has an invalid hostname.` };
+    }
+    if (item.provider != null && (typeof item.provider !== 'string' || item.provider.length > 256)) {
+      return { status: 400, error: `Item at index ${index} has an invalid provider.` };
+    }
+    if (item.details !== undefined && (!item.details || typeof item.details !== 'object' || Array.isArray(item.details))) {
+      return { status: 400, error: `Item at index ${index} has invalid details.` };
+    }
+  }
+  return null;
+}
+
+export async function isDuplicateAgentEvent(tx, sourceEventKey) {
+  const lockKey = Buffer.from(sourceEventKey, 'hex').readBigInt64BE(0);
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(${lockKey})::text AS locked`;
+  const existing = await tx.event.findFirst({
+    where: { metadata: { path: ['sourceEventKey'], equals: sourceEventKey } },
+    select: { id: true },
+  });
+  return Boolean(existing);
+}
 
 // ── Token Management (ADMIN only) ────────────────────────────────────────────
 
@@ -160,6 +247,19 @@ export async function agentCheckin(req, res, next) {
     const agentToken = req.agentToken;
     const { hostname, platform, collectorVersion, channels } = req.body || {};
 
+    if (hostname != null && (typeof hostname !== 'string' || hostname.length > 100)) {
+      return res.status(400).json({ success: false, error: 'Collector hostname is invalid.' });
+    }
+    if (platform != null && (typeof platform !== 'string' || platform.length > 200)) {
+      return res.status(400).json({ success: false, error: 'Collector platform is invalid.' });
+    }
+    if (collectorVersion != null && (typeof collectorVersion !== 'string' || collectorVersion.length > 50)) {
+      return res.status(400).json({ success: false, error: 'Collector version is invalid.' });
+    }
+    if (channels != null && (!Array.isArray(channels) || channels.length > 3 || channels.some((channel) => !ALLOWED_CHANNELS.has(channel)))) {
+      return res.status(400).json({ success: false, error: 'Collector channels are invalid.' });
+    }
+
     const status = await prisma.collectorStatus.upsert({
       where: { agentTokenId: agentToken.id },
       create: {
@@ -199,10 +299,10 @@ export async function agentCheckin(req, res, next) {
 export async function agentReportError(req, res, next) {
   try {
     const agentToken = req.agentToken;
-    const { error } = req.body || {};
-    const truncatedError = typeof error === 'string'
-      ? error.slice(0, MAX_ERROR_LENGTH)
-      : 'Unknown error';
+    const { code } = req.body || {};
+    const message = Object.hasOwn(SAFE_ERROR_MESSAGES, code)
+      ? SAFE_ERROR_MESSAGES[code]
+      : SAFE_ERROR_MESSAGES.COLLECTION_FAILED;
 
     await prisma.collectorStatus.upsert({
       where: { agentTokenId: agentToken.id },
@@ -210,13 +310,13 @@ export async function agentReportError(req, res, next) {
         agentTokenId: agentToken.id,
         lastCheckinAt: new Date(),
         status: 'ERROR',
-        lastError: truncatedError,
+        lastError: message.slice(0, MAX_ERROR_LENGTH),
         channels: [],
       },
       update: {
         lastCheckinAt: new Date(),
         status: 'ERROR',
-        lastError: truncatedError,
+        lastError: message.slice(0, MAX_ERROR_LENGTH),
       },
     });
 
@@ -251,33 +351,9 @@ export async function agentIngest(req, res, next) {
   try {
     const agentToken = req.agentToken;
     const { logs } = req.body || {};
-
-    if (!Array.isArray(logs) || logs.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Body must be { logs: [...] } with at least one item.',
-      });
-    }
-
-    if (logs.length > MAX_BATCH_SIZE) {
-      return res.status(400).json({
-        success: false,
-        error: `Batch size ${logs.length} exceeds maximum ${MAX_BATCH_SIZE}.`,
-      });
-    }
-
-    // Validate each item
-    for (let i = 0; i < logs.length; i++) {
-      const item = logs[i];
-      if (!item || typeof item !== 'object') {
-        return res.status(400).json({ success: false, error: `Item at index ${i} must be an object.` });
-      }
-      if (!item.source || typeof item.source !== 'string' || !item.source.trim()) {
-        return res.status(400).json({ success: false, error: `Item at index ${i} missing 'source'.` });
-      }
-      if (!item.content || typeof item.content !== 'string' || !item.content.trim()) {
-        return res.status(400).json({ success: false, error: `Item at index ${i} missing 'content'.` });
-      }
+    const validationError = validateAgentLogBatch(logs);
+    if (validationError) {
+      return res.status(validationError.status).json({ success: false, error: validationError.error });
     }
 
     const receivedAt = new Date();
@@ -291,37 +367,18 @@ export async function agentIngest(req, res, next) {
         const source = item.source.trim();
         const rawContent = item.content;
         const eventRecordId = item.eventRecordId?.toString() || null;
-
-        // Deduplication: check if this Windows Record ID was already ingested
-        // by looking for a raw_log with matching source and eventRecordId in metadata
-        if (eventRecordId) {
-          // We store eventRecordId in the Event.metadata field
-          const existing = await tx.event.findFirst({
-            where: {
-              eventType: { startsWith: 'windows_' },
-              metadata: { path: ['eventRecordId'], equals: eventRecordId },
-              rawLog: { source },
-            },
-            select: { id: true },
-          });
-          if (existing) {
-            skipped++;
-            continue;
-          }
+        const sourceEventKey = createSourceEventKey(agentToken.name, item);
+        if (await isDuplicateAgentEvent(tx, sourceEventKey)) {
+          skipped++;
+          continue;
         }
 
-        const normalized = normalizeLog(source, rawContent, receivedAt);
-
-        // Merge Windows-specific fields into metadata
-        if (item.eventId) {
-          normalized.metadata = {
-            ...(normalized.metadata || {}),
-            eventId: item.eventId,
-            eventRecordId,
-            channel: source,
-            collectorName: agentToken.name,
-          };
-        }
+        const normalized = parseWindowsEventRecord(item, receivedAt) || normalizeLog(source, rawContent, receivedAt);
+        normalized.metadata = {
+          ...(normalized.metadata || {}),
+          collectorName: agentToken.name,
+          sourceEventKey,
+        };
 
         const rawLog = await tx.rawLog.create({
           data: { source, rawContent, receivedAt },
@@ -342,6 +399,10 @@ export async function agentIngest(req, res, next) {
             severity: normalized.severity,
             metadata: normalized.metadata,
           },
+        });
+
+        await tx.processingJob.create({
+          data: { eventId: event.id, status: 'PENDING' },
         });
 
         events.push(event);
@@ -373,6 +434,12 @@ export async function agentIngest(req, res, next) {
       });
 
       return { ingested, skipped, events };
+    });
+
+    publishLiveUpdate('events.accepted', {
+      ingested: result.ingested,
+      skipped: result.skipped,
+      eventIds: result.events.map((event) => event.id),
     });
 
     return res.status(201).json({

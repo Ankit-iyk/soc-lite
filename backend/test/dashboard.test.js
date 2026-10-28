@@ -9,6 +9,7 @@ import app from '../src/app.js';
 import prisma from '../src/config/prisma.js';
 import { signToken } from '../src/utils/jwt.js';
 import { IncidentStatus, Severity, AlertStatus } from '@prisma/client';
+import { publishLiveUpdate } from '../src/live/eventBus.js';
 
 let server;
 let baseUrl;
@@ -119,6 +120,36 @@ describe('Phase 7 — Security Operations Center Dashboard API', () => {
       const body = await res.json();
       assert.equal(body.success, false);
       assert.match(body.error, /invalid.*token/i);
+    });
+
+    it('streams authenticated dashboard updates', async () => {
+      const abortController = new AbortController();
+      const response = await fetch(`${baseUrl}/api/dashboard/live`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+        signal: abortController.signal,
+      });
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get('content-type'), /text\/event-stream/);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let streamData = '';
+      while (!streamData.includes('event: connected')) {
+        const chunk = await reader.read();
+        if (chunk.done) assert.fail('Live stream ended before its welcome event');
+        streamData += decoder.decode(chunk.value, { stream: true });
+      }
+
+      publishLiveUpdate('dashboard.changed', { alertsCreated: 1 });
+      while (!streamData.includes('event: dashboard.changed')) {
+        const chunk = await reader.read();
+        if (chunk.done) assert.fail('Live stream ended before dashboard update');
+        streamData += decoder.decode(chunk.value, { stream: true });
+      }
+      assert.match(streamData, /"alertsCreated":1/);
+
+      await reader.cancel();
+      abortController.abort();
     });
 
     it('allows ADMIN to access dashboard summary', async () => {

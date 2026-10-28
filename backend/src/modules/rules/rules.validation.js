@@ -82,9 +82,29 @@ export function validateRuleConfig(ruleType, partialConfig, mergedConfig) {
     case 'SUSPICIOUS_ACCESS':
       return validateSuspiciousAccessConfig(partialConfig, mergedConfig);
 
+    case 'WINDOWS_FAILED_LOGON':
+      return validateWindowsFailedLogonConfig(partialConfig, mergedConfig);
+
     default:
       return `Unknown rule type "${ruleType}".`;
   }
+}
+
+function validateWindowsFailedLogonConfig(partialConfig, mergedConfig) {
+  const allowed = ['threshold', 'windowSeconds'];
+  const unknown = Object.keys(partialConfig).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) {
+    return `Unsupported config key(s) for WINDOWS_FAILED_LOGON: ${unknown.join(', ')}. Allowed: ${allowed.join(', ')}.`;
+  }
+
+  const { threshold, windowSeconds } = mergedConfig;
+  if (!Number.isInteger(threshold) || threshold < 2 || threshold > 1000) {
+    return 'WINDOWS_FAILED_LOGON config.threshold must be an integer between 2 and 1000.';
+  }
+  if (!Number.isInteger(windowSeconds) || windowSeconds < 1 || windowSeconds > 86400) {
+    return 'WINDOWS_FAILED_LOGON config.windowSeconds must be an integer between 1 and 86400 seconds.';
+  }
+  return null;
 }
 
 /**

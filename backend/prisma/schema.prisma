@@ -113,11 +113,31 @@ model Event {
   metadata  Json?
 
   alertEvents AlertEvent[]
+  processingJob ProcessingJob?
 
   @@index([timestamp])
   @@index([srcIp])
   @@index([eventType])
   @@map("events")
+}
+
+model ProcessingJob {
+  id              String    @id @default(uuid())
+  eventId         String    @unique
+  event           Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  status          String    @default("PENDING")
+  attempts        Int       @default(0)
+  availableAt     DateTime  @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+  failedAt        DateTime?
+  lastError       String?   @db.Text
+  processingMs    Int?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, availableAt])
+  @@map("processing_jobs")
 }
 
 model DetectionRule {

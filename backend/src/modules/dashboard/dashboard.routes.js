@@ -4,6 +4,7 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../middleware/auth.js';
 import { getDashboardSummary } from './dashboard.controller.js';
+import { streamDashboardUpdates } from './live.controller.js';
 
 const router = Router();
 
@@ -14,6 +15,13 @@ router.get(
   requireAuth,
   requireRole('ADMIN', 'ANALYST', 'VIEWER'),
   getDashboardSummary
+);
+
+router.get(
+  '/live',
+  requireAuth,
+  requireRole('ADMIN', 'ANALYST', 'VIEWER'),
+  streamDashboardUpdates
 );
 
 export default router;

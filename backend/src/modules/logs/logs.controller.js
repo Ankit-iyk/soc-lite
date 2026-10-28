@@ -3,6 +3,7 @@
 
 import prisma from '../../config/prisma.js';
 import { normalizeLog } from './logParser.js';
+import { publishLiveUpdate } from '../../live/eventBus.js';
 
 const MAX_BATCH_SIZE = 100;
 const MAX_SOURCE_LENGTH = 100;
@@ -126,6 +127,10 @@ export async function ingestLogs(req, res, next) {
           },
         });
 
+        await tx.processingJob.create({
+          data: { eventId: event.id, status: 'PENDING' },
+        });
+
         createdEvents.push(event);
       }
 
@@ -146,6 +151,13 @@ export async function ingestLogs(req, res, next) {
       }
 
       return createdEvents;
+    });
+
+    publishLiveUpdate('events.accepted', {
+      accepted: result.length,
+      rejected: 0,
+      duplicates: 0,
+      eventIds: result.map((event) => event.id),
     });
 
     return res.status(201).json({

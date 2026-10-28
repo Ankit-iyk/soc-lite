@@ -6,6 +6,7 @@ import { config, getMaskedDatabaseUrl } from './src/config/env.js';
 import app from './src/app.js';
 import prisma from './src/config/prisma.js';
 import { startDetectionScheduler, stopDetectionScheduler } from './src/detection/scheduler.js';
+import { startAnalysisWorker, stopAnalysisWorker } from './src/processing/analysis.worker.js';
 
 const server = app.listen(config.port, () => {
   console.log(`\n🛡️  SOC Lite Backend`);
@@ -32,6 +33,15 @@ const server = app.listen(config.port, () => {
     const reason = isTestEnv ? 'NODE_ENV=test' : 'DETECTION_SCHEDULER_ENABLED=false';
     console.log(`   Scheduler   : disabled (${reason})\n`);
   }
+
+  if (!isTestEnv) {
+    const intervalMs = Number.parseInt(process.env.ANALYSIS_INTERVAL_MS ?? '1000', 10);
+    try {
+      startAnalysisWorker({ intervalMs });
+    } catch (err) {
+      console.error(`   Analysis    : failed to start — ${err.message}\n`);
+    }
+  }
 });
 
 // Tracks whether shutdown is in progress to prevent duplicate invocations.
@@ -50,6 +60,7 @@ async function shutdown(signal) {
   // forcibly terminate the process while a detection run is active because
   // doing so would leave the database in an indeterminate state.
   stopDetectionScheduler();
+  stopAnalysisWorker();
 
   // 2. Close the HTTP server (stop accepting new connections).
   server.close(async () => {

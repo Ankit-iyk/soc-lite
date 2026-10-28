@@ -11,6 +11,7 @@ import {
   parseSshAuthLog,
   parseFirewallLog,
   parseJsonLog,
+  parseWindowsEventRecord,
   parseGenericFallback,
   normalizeLog,
 } from '../src/modules/logs/logParser.js';
@@ -126,6 +127,57 @@ describe('Phase 3 — Log Parser Unit Tests', () => {
     assert.equal(res.severity, 'HIGH');
     assert.equal(res.metadata.customDetector, 'WAF-Rule-99');
     assert.equal(res.metadata.ruleScore, 88);
+  });
+
+  it('Normalizes a Windows 4625 fixture without inventing unavailable fields', () => {
+    const record = {
+      channel: 'Security',
+      provider: 'Microsoft-Windows-Security-Auditing',
+      eventId: 4625,
+      eventRecordId: '8421',
+      timeCreated: '2026-10-27T10:00:00Z',
+      hostname: 'WS-01',
+      details: {
+        TargetUserName: 'analyst',
+        IpAddress: '192.0.2.9',
+        IpPort: '51422',
+        Status: '0xc000006d',
+      },
+    };
+
+    const result = parseWindowsEventRecord(record);
+
+    assert.equal(result.eventType, 'windows_failed_logon');
+    assert.equal(result.timestamp.toISOString(), new Date(record.timeCreated).toISOString());
+    assert.equal(result.username, 'analyst');
+    assert.equal(result.srcIp, '192.0.2.9');
+    assert.equal(result.srcPort, 51422);
+    assert.equal(result.dstIp, null);
+    assert.equal(result.dstPort, null);
+    assert.equal(result.hostname, 'WS-01');
+    assert.equal(result.severity, 'HIGH');
+    assert.equal(result.metadata.channel, 'Security');
+    assert.equal(result.metadata.provider, 'Microsoft-Windows-Security-Auditing');
+    assert.equal(result.metadata.eventRecordId, '8421');
+    assert.equal(result.metadata.details.Status, '0xc000006d');
+  });
+
+  it('Normalizes a Windows 4624 fixture and keeps placeholder identity fields null', () => {
+    const result = parseWindowsEventRecord({
+      channel: 'Security',
+      provider: 'Microsoft-Windows-Security-Auditing',
+      eventId: 4624,
+      eventRecordId: '8422',
+      timeCreated: '2026-10-27T10:01:00Z',
+      hostname: 'WS-01',
+      details: { TargetUserName: '-', IpAddress: '-' },
+    });
+
+    assert.equal(result.eventType, 'windows_successful_logon');
+    assert.equal(result.username, null);
+    assert.equal(result.srcIp, null);
+    assert.equal(result.severity, 'LOW');
+    assert.equal(result.metadata.eventId, 4624);
   });
 
   it('Safely handles malformed JSON without crashing or losing data', () => {

@@ -5,13 +5,14 @@
 
 export function errorHandler(err, req, res, _next) {
   const status = err.status ?? err.statusCode ?? 500;
-  const message = err.message ?? 'Internal Server Error';
+  const isDatabaseError = typeof err.code === 'string' && (err.code.startsWith('P') || err.code.startsWith('N/A'));
+  const message = isDatabaseError && process.env.NODE_ENV === 'production'
+    ? 'Internal database operation failed.'
+    : (isDatabaseError ? 'Database operation failed.' : err.message ?? 'Internal Server Error');
 
-  // Don't leak stack traces to the client in production
   const body = {
     success: false,
     error: message,
-    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
   };
 
   console.error(`[ERROR] ${req.method} ${req.url} → ${status}: ${message}`);

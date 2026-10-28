@@ -53,7 +53,7 @@ async function main() {
   }
 
   // 2. Seed Baseline Detection Rules
-  console.log('   Seeding 4 baseline detection rules…');
+  console.log('   Seeding 5 baseline detection rules…');
   const defaultRules = [
     {
       name: 'SSH Brute Force Detection',
@@ -65,6 +65,17 @@ async function main() {
         threshold: 5,
         windowSeconds: 60,
         eventType: 'ssh_login_failed',
+      },
+    },
+    {
+      name: 'Windows Failed Logon Burst',
+      type: RuleType.WINDOWS_FAILED_LOGON,
+      severity: Severity.HIGH,
+      description: 'Detects 5 or more Windows failed logons for the same account and host within 5 minutes.',
+      enabled: true,
+      config: {
+        threshold: 5,
+        windowSeconds: 300,
       },
     },
     {

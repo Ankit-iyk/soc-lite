@@ -274,6 +274,62 @@ export function parseJsonLog(rawContent, receivedAt = new Date()) {
 }
 
 /**
+ * Normalizes fields extracted from a Windows Event XML record by the collector.
+ * The original XML remains stored separately as the RawLog content.
+ */
+export function parseWindowsEventRecord(record, receivedAt = new Date()) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+
+  const eventId = Number(record.eventId);
+  if (!Number.isInteger(eventId) || eventId < 0) return null;
+
+  const details = record.details && typeof record.details === 'object' && !Array.isArray(record.details)
+    ? record.details
+    : {};
+  const field = (...names) => {
+    for (const name of names) {
+      const value = details[name];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return null;
+  };
+
+  const timestamp = typeof record.timeCreated === 'string'
+    ? parseLogTimestamp(record.timeCreated, receivedAt)
+    : receivedAt;
+  const eventType = eventId === 4625
+    ? 'windows_failed_logon'
+    : eventId === 4624
+      ? 'windows_successful_logon'
+      : 'windows_event';
+  const rawIp = field('IpAddress', 'SourceIp', 'SourceAddress');
+  const rawUsername = field('TargetUserName', 'AccountName', 'UserName');
+
+  return {
+    timestamp,
+    eventType,
+    srcIp: isValidIp(rawIp) ? rawIp : null,
+    dstIp: null,
+    srcPort: validatePort(field('IpPort', 'SourcePort')),
+    dstPort: null,
+    username: rawUsername === '-' ? null : rawUsername,
+    hostname: typeof record.hostname === 'string' ? record.hostname.trim() || null : null,
+    message: typeof record.message === 'string' && record.message.trim()
+      ? record.message.trim()
+      : `Windows Event ID ${eventId}`,
+    severity: eventId === 4625 ? Severity.HIGH : Severity.LOW,
+    metadata: {
+      eventId,
+      eventRecordId: record.eventRecordId == null ? null : String(record.eventRecordId),
+      channel: typeof record.channel === 'string' ? record.channel : null,
+      provider: typeof record.provider === 'string' ? record.provider : null,
+      userSid: typeof record.userSid === 'string' ? record.userSid : null,
+      details,
+    },
+  };
+}
+
+/**
  * Format 4: Generic Fallback Parser.
  * Used when no specific parser matches or for malformed lines.
  * Guarantees zero data loss without inventing fields.

@@ -23,6 +23,7 @@ import assetRoutes from './modules/assets/assets.routes.js';
 import threatIntelRoutes from './modules/threat-intelligence/threatIntel.routes.js';
 import reportRoutes from './modules/reports/reports.routes.js';
 import auditRoutes from './modules/audit/audit.routes.js';
+import collectorRoutes from './modules/collectors/collectors.routes.js';
 
 const app = express();
 
@@ -58,6 +59,7 @@ app.use('/api/threat-intelligence', threatIntelRoutes);
 app.use('/api/reports',             reportRoutes);
 app.use('/api/audit-logs',          auditRoutes);
 app.use('/api/audit',               auditRoutes);
+app.use('/api/collectors',          collectorRoutes);
 
 // ── 404 handler ───────────────────────────────────────────────────────────
 app.use((_req, res) => {

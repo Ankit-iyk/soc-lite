@@ -33,7 +33,12 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
-import { getDashboardSummaryApi } from '../api/dashboard.api';
+import {
+  getDashboardSummaryApi,
+  subscribeToDashboardUpdates,
+} from '../api/dashboard.api';
+import { runDetectionApi } from '../api/rules.api';
+import { useAuth } from '../hooks/useAuth';
 
 // ── Severity & Status Palette (matching index.css tokens) ────────────────────
 const SEVERITY_COLORS = {
@@ -108,12 +113,19 @@ function CustomChartTooltip({ active, payload, label }) {
 }
 
 export default function Dashboard() {
+  const { user } = useAuth();
+  const canRunDetection = user?.role === 'ADMIN' || user?.role === 'ANALYST';
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [timeWindow, setTimeWindow] = useState('24h'); // '24h' | '7d'
   const [autoRefreshInterval, setAutoRefreshInterval] = useState(0); // 0 = off, 30000, 60000
+  const [runningDetection, setRunningDetection] = useState(false);
+  const [detectionMessage, setDetectionMessage] = useState('');
+  const liveRefreshTimerRef = useRef(null);
+  const latestRequestRef = useRef(0);
+  const inFlightRequestRef = useRef(null);
 
   // Track mount state to prevent memory leaks / state updates on unmounted component
   const isMountedRef = useRef(true);
@@ -127,32 +139,47 @@ export default function Dashboard() {
   // ── Fetch Dashboard Data ───────────────────────────────────────────────────
   const fetchDashboardData = useCallback(
     async (isManualRefresh = false) => {
-      if (isManualRefresh) setRefreshing(true);
-      setError('');
+      const requestKey = timeWindow;
+      const existingRequest = inFlightRequestRef.current;
+      if (existingRequest?.key === requestKey) {
+        return existingRequest.promise;
+      }
 
-      try {
-        const res = await getDashboardSummaryApi({ timeWindow, recentLimit: 5 });
-        if (isMountedRef.current) {
+      if (isManualRefresh) setRefreshing(true);
+      const requestId = ++latestRequestRef.current;
+
+      const promise = (async () => {
+        try {
+          const res = await getDashboardSummaryApi({ timeWindow, recentLimit: 5 });
+          if (!isMountedRef.current || requestId !== latestRequestRef.current) return;
+
           if (res?.success && res.data) {
             setData(res.data);
+            setError('');
           } else {
             setError(res?.error || 'Failed to retrieve dashboard metrics.');
           }
+        } catch (err) {
+          if (isMountedRef.current && requestId === latestRequestRef.current) {
+            setError(
+              err.response?.data?.error ||
+                err.message ||
+                'Failed to communicate with the security dashboard API.'
+            );
+          }
+        } finally {
+          if (isMountedRef.current && requestId === latestRequestRef.current) {
+            setLoading(false);
+            setRefreshing(false);
+          }
+          if (inFlightRequestRef.current?.key === requestKey) {
+            inFlightRequestRef.current = null;
+          }
         }
-      } catch (err) {
-        if (isMountedRef.current) {
-          setError(
-            err.response?.data?.error ||
-              err.message ||
-              'Failed to communicate with the security dashboard API.'
-          );
-        }
-      } finally {
-        if (isMountedRef.current) {
-          setLoading(false);
-          setRefreshing(false);
-        }
-      }
+      })();
+
+      inFlightRequestRef.current = { key: requestKey, promise };
+      return promise;
     },
     [timeWindow]
   );
@@ -171,7 +198,49 @@ export default function Dashboard() {
     };
   }, [fetchDashboardData]);
 
-  // ── Auto-refresh interval ──────────────────────────────────────────────────
+  const handleRunDetection = useCallback(async () => {
+    setRunningDetection(true);
+    setDetectionMessage('');
+    setError('');
+
+    try {
+      const response = await runDetectionApi({ windowMinutes: timeWindow === '7d' ? 10080 : 1440, limit: 5000 });
+      if (!response?.success || !response.data) {
+        throw new Error(response?.error || 'Detection run failed.');
+      }
+
+      const { matchesFound = 0, alertsCreated = 0, alertsUpdated = 0 } = response.data;
+      setDetectionMessage(
+        `Detection complete: ${matchesFound} match(es), ${alertsCreated} alert(s) created, ${alertsUpdated} updated.`
+      );
+      await fetchDashboardData(false);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Failed to run detection.');
+    } finally {
+      setRunningDetection(false);
+    }
+  }, [fetchDashboardData, timeWindow]);
+
+  // ── Automatic dashboard updates ────────────────────────────────────────────
+  useEffect(() => {
+    const unsubscribe = subscribeToDashboardUpdates(() => {
+      if (liveRefreshTimerRef.current) window.clearTimeout(liveRefreshTimerRef.current);
+      liveRefreshTimerRef.current = window.setTimeout(() => {
+        liveRefreshTimerRef.current = null;
+        fetchDashboardData(false);
+      }, 250);
+    });
+
+    return () => {
+      unsubscribe();
+      if (liveRefreshTimerRef.current) {
+        window.clearTimeout(liveRefreshTimerRef.current);
+        liveRefreshTimerRef.current = null;
+      }
+    };
+  }, [fetchDashboardData]);
+
+  // ── Optional periodic refresh (SSE remains enabled as the primary updates) ─
   useEffect(() => {
     if (!autoRefreshInterval || autoRefreshInterval <= 0) return;
 
@@ -315,6 +384,19 @@ export default function Dashboard() {
             />
             {refreshing ? 'Updating…' : 'Refresh'}
           </button>
+
+          {canRunDetection && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleRunDetection}
+              disabled={runningDetection || loading}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '12px' }}
+            >
+              <Activity size={14} className={runningDetection ? 'animate-pulse' : ''} />
+              {runningDetection ? 'Running detection…' : 'Run detection'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -352,6 +434,25 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* ── Detection Action Status ─────────────────────────────────────── */}
+      {detectionMessage && (
+        <div
+          role="status"
+          style={{
+            background: 'rgba(70, 211, 105, 0.08)',
+            border: '1px solid rgba(70, 211, 105, 0.28)',
+            borderRadius: 'var(--radius-card)',
+            padding: '0.75rem 1rem',
+            marginBottom: '1.5rem',
+            color: 'var(--color-accent)',
+            fontSize: '13px',
+            fontWeight: 500,
+          }}
+        >
+          {detectionMessage}
+        </div>
+      )}
 
       {/* ── Error Banner with Retry ────────────────────────────────────────── */}
       {error && (

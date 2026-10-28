@@ -1,0 +1,7 @@
+{
+  "api_url": "http://127.0.0.1:3000/api",
+  "channels": ["System", "Application", "Security"],
+  "poll_interval_seconds": 10,
+  "batch_size": 100,
+  "start_from_beginning": false
+}

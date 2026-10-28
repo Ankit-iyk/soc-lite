@@ -6,6 +6,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   ScrollText,
+  RadioTower,
   BellDot,
   FolderOpen,
   Server,
@@ -30,6 +31,7 @@ const NAV = [
     section: 'Detection',
     items: [
       { to: '/logs',      icon: ScrollText,          label: 'Logs'         },
+      { to: '/collectors', icon: RadioTower,         label: 'Collectors'   },
       { to: '/alerts',    icon: BellDot,             label: 'Alerts'       },
       { to: '/incidents', icon: FolderOpen,          label: 'Incidents'    },
     ],

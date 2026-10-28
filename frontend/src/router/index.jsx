@@ -34,6 +34,13 @@ export const router = createBrowserRouter([
         },
       },
       {
+        path: 'collectors',
+        lazy: async () => {
+          const { default: Component } = await import('../pages/Collectors');
+          return { Component };
+        },
+      },
+      {
         path: 'alerts',
         lazy: async () => {
           const { default: Component } = await import('../pages/Alerts');

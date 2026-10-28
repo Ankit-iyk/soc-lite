@@ -9,6 +9,7 @@ import { evaluate as evaluateSshBruteForce } from '../src/detection/evaluators/s
 import { evaluate as evaluatePortScan } from '../src/detection/evaluators/portScan.js';
 import { evaluate as evaluateSuspiciousIp } from '../src/detection/evaluators/suspiciousIp.js';
 import { evaluate as evaluateSuspiciousAccess } from '../src/detection/evaluators/suspiciousAccess.js';
+import { evaluate as evaluateWindowsFailedLogon } from '../src/detection/evaluators/windowsFailedLogon.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -644,5 +645,37 @@ describe('Suspicious Access Evaluator', () => {
     assert.ok(matches[0].dedupKey.includes('root'));
     assert.ok(matches[0].dedupKey.includes('evt-1234'));
     assert.ok(matches[0].dedupKey.startsWith('suspicious_access::'));
+  });
+});
+
+describe('Windows Failed Logon Evaluator', () => {
+  const rule = { config: { threshold: 3, windowSeconds: 300 } };
+
+  it('detects repeated 4625-normalized events and retains evidence', () => {
+    const start = Date.parse('2026-10-27T10:00:00Z');
+    const events = Array.from({ length: 3 }, (_, index) => makeEvent({
+      id: `windows-${index}`,
+      eventType: 'windows_failed_logon',
+      hostname: 'WS-01',
+      username: 'analyst',
+      srcIp: null,
+      timestamp: new Date(start + index * 30_000).toISOString(),
+    }));
+
+    const matches = evaluateWindowsFailedLogon(events, rule);
+
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0].triggeringEvents.length, 3);
+    assert.equal(matches[0].metadata.hostname, 'WS-01');
+    assert.equal(matches[0].metadata.srcIp, null);
+    assert.equal(matches[0].dedupKey.startsWith('windows_failed_logon::'), true);
+  });
+
+  it('does not group missing account data or unrelated event types', () => {
+    const events = [
+      makeEvent({ eventType: 'windows_failed_logon', hostname: 'WS-01', username: null }),
+      makeEvent({ eventType: 'windows_successful_logon', hostname: 'WS-01', username: 'analyst' }),
+    ];
+    assert.equal(evaluateWindowsFailedLogon(events, rule).length, 0);
   });
 });

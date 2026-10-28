@@ -10,6 +10,8 @@ import { evaluate as evaluateSshBruteForce } from './evaluators/sshBruteForce.js
 import { evaluate as evaluatePortScan } from './evaluators/portScan.js';
 import { evaluate as evaluateSuspiciousIp } from './evaluators/suspiciousIp.js';
 import { evaluate as evaluateSuspiciousAccess } from './evaluators/suspiciousAccess.js';
+import { evaluate as evaluateWindowsFailedLogon } from './evaluators/windowsFailedLogon.js';
+import { publishLiveUpdate } from '../live/eventBus.js';
 import { AlertStatus } from '@prisma/client';
 
 // In-process lock / queue to serialize concurrent detection engine executions
@@ -78,6 +80,18 @@ export function buildMatchTitleAndDescription(match, rule) {
       return {
         title: `Suspicious Admin Access: ${username}`,
         description: `Administrative user '${username}' authenticated via SSH outside approved operating schedule (${reasons}).`,
+      };
+    }
+
+    case 'WINDOWS_FAILED_LOGON': {
+      const username = meta.username || 'unknown';
+      const hostname = meta.hostname || 'unknown host';
+      const srcIp = meta.srcIp ? ` from ${meta.srcIp}` : '';
+      const count = meta.count || match.triggeringEvents?.length || rule.config.threshold;
+      const windowSec = rule.config.windowSeconds || 300;
+      return {
+        title: `Windows Failed Logons: ${username} on ${hostname}`,
+        description: `Detected ${count} failed Windows logons for '${username}' on ${hostname}${srcIp} within ${windowSec} seconds.`,
       };
     }
 
@@ -231,6 +245,10 @@ async function executeDetectionPipeline(options) {
           matches = evaluateSuspiciousAccess(events, rule, context);
           break;
 
+        case 'WINDOWS_FAILED_LOGON':
+          matches = evaluateWindowsFailedLogon(events, rule, context);
+          break;
+
         default:
           summary.errors.push(`Unsupported rule type '${rule.type}' on rule '${rule.name}'`);
           continue;
@@ -286,6 +304,13 @@ async function executeDetectionPipeline(options) {
         },
       })
       .catch((err) => console.error('AuditLog error in detection run:', err.message));
+  }
+
+  if (summary.alertsCreated > 0 || summary.alertsUpdated > 0) {
+    publishLiveUpdate('dashboard.changed', {
+      alertsCreated: summary.alertsCreated,
+      alertsUpdated: summary.alertsUpdated,
+    });
   }
 
   return summary;
